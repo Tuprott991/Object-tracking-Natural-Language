@@ -50,6 +50,9 @@ tracked_object_id = None  # ID của object được track
 tracked_bbox = None       # BBox của object được track
 saved_image_count = 0
 main_label = None
+
+def initialize_models(device):
+    return model_clip, processor_clip, model_yolo, tracker, class_names
  
 # Hàm so khớp object gần nhất với truy vấn
 def match_object_with_query(query_vector, results, frame, first_frame=True):
@@ -80,128 +83,132 @@ def match_object_with_query(query_vector, results, frame, first_frame=True):
 
     return matched_bbox, False  # Return False for first_frame flag
 
-text = input("Nhập câu truy vấn: ")
-text = clip.tokenize([text]).to(device)
-query_vector = model_clip.encode_text(text).cpu().detach().numpy().astype(np.float32)
 
-saved_image_count = 0
-first_time  = True
 # Vòng lặp đọc frame
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
 
-    results = model_yolo(frame)
-    tracked_bbox, first_frame = match_object_with_query(query_vector, results, frame, first_frame=True)
+if __name__ == "__main__":
+    text = input("Nhập câu truy vấn: ")
+    text = clip.tokenize([text]).to(device)
+    query_vector = model_clip.encode_text(text).cpu().detach().numpy().astype(np.float32)
 
-    # Phát hiện và lấy bounding box cho lần đầu tiên
-    if tracked_bbox:
-        tracked_object_id = 1  # Chỉ theo dõi một đối tượng duy nhất
-        print(f"Đã phát hiện đối tượng, ID: {tracked_object_id}")
-    else:
-        first_frame = False  # Sau lần đầu tiên, không cần so khớp lại CLIP
-    
+    saved_image_count = 0
+    first_time  = True
 
-    if tracked_object_id is not None and tracked_bbox:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-        detect = []
+        results = model_yolo(frame)
+        tracked_bbox, first_frame = match_object_with_query(query_vector, results, frame, first_frame=True)
 
-        x1, y1, x2, y2 = tracked_bbox
-        print(tracked_bbox)
-        detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
+        # Phát hiện và lấy bounding box cho lần đầu tiên
+        if tracked_bbox:
+            tracked_object_id = 1  # Chỉ theo dõi một đối tượng duy nhất
+            print(f"Đã phát hiện đối tượng, ID: {tracked_object_id}")
+        else:
+            first_frame = False  # Sau lần đầu tiên, không cần so khớp lại CLIP
+        
 
-        tracks = tracker.update_tracks(detect, frame=frame)
-        # if first_time:
+        if tracked_object_id is not None and tracked_bbox:
+
+            detect = []
+
+            x1, y1, x2, y2 = tracked_bbox
+            print(tracked_bbox)
+            detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
+
+            tracks = tracker.update_tracks(detect, frame=frame)
+            # if first_time:
+            #     x1, y1, x2, y2 = tracked_bbox
+            #     detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
+            #     first_time = False
+            # else:
+            #     for detect_object in results.pred[0]:
+            #         label, confidence, bbox = detect_object[5], detect_object[4], detect_object[:4] #bbox là tỉ lệ
+
+            #         #Ánh xạ lại số nguyên, tại output là số thực .
+            #         x1, y1, x2, y2 = map(int, bbox)
+            #         class_id = int(label)
+
+            #         if confidence < conf_threshold: # Confidence bé hơn ngưỡng thì loại
+            #             continue
+            #         else: # Nếu cái class_id detect khác với cái tracking_class mong muốn hoặc confidence không đủ thì pass
+            #             if class_id != main_label or confidence < conf_threshold:
+            #                 continue
+            #         detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
+
+            # Cập nhật theo dõi đối tượng duy nhất
+            cropped_obj = frame[y1:y2, x1:x2]
+
+            if cropped_obj.size > 0:  # Kiểm tra bounding box không rỗng
+                save_path = f"tracked_images/track_{saved_image_count}.jpg"
+                cv2.imwrite(save_path, cropped_obj)
+                print(f"Saved image: {save_path}")
+                saved_image_count += 1
+
+        
+
+            # tracked_ids = [track.track_id for track in tracks if track.is_confirmed()]
+            # print(tracked_ids)
+            # if str(tracked_object_id) not in tracked_ids:
+            #     print("Đối tượng bị mất dấu, cần tìm lại...")
+            #     tracked_bbox, first_frame = match_object_with_query(query_vector, results, frame, first_frame=True)
+            #     if tracked_bbox:
+            #         print(f"Tìm lại đối tượng, ID: {tracked_object_id}")
+            #     else:
+            #         tracked_object_id = None  # Nếu không tìm lại được, reset ID đối tượng
+            #         print("Không tìm lại được đối tượng.")
+
+            for track in tracks:
+                if track.is_confirmed(): #and track.track_id == tracked_object_id:
+                    ltrb = track.to_ltrb()
+                    x1, y1, x2, y2 = map(int, ltrb)
+                    color = [73,248,255]
+                    B, G, R = map(int, color)
+
+                    label = f"Tracked-{tracked_object_id}"
+                    print(label)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (B, G, R), 2)
+                    cv2.rectangle(frame, (x1 - 1, y1 - 20), (x1 + len(label) * 12, y1), (B, G, R), -1)
+                    cv2.putText(frame, label, (x1 + 5, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+
+
+        # DeepSORT cập nhật tracking nếu đã có bounding box
+        # detect = []
+        # if tracked_bbox:
         #     x1, y1, x2, y2 = tracked_bbox
         #     detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
-        #     first_time = False
-        # else:
-        #     for detect_object in results.pred[0]:
-        #         label, confidence, bbox = detect_object[5], detect_object[4], detect_object[:4] #bbox là tỉ lệ
+        #     cropped_obj = frame[y1:y2, x1:x2]
 
-        #         #Ánh xạ lại số nguyên, tại output là số thực .
-        #         x1, y1, x2, y2 = map(int, bbox)
-        #         class_id = int(label)
+        #     if cropped_obj.size > 0:  # Kiểm tra bounding box không rỗng
+        #         save_path = f"tracked_images/track_{saved_image_count}.jpg"
+        #         cv2.imwrite(save_path, cropped_obj)
+        #         print(f"Saved image: {save_path}")
+        #         saved_image_count += 1
 
-        #         if confidence < conf_threshold: # Confidence bé hơn ngưỡng thì loại
-        #             continue
-        #         else: # Nếu cái class_id detect khác với cái tracking_class mong muốn hoặc confidence không đủ thì pass
-        #             if class_id != main_label or confidence < conf_threshold:
-        #                 continue
-        #         detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
 
-        # Cập nhật theo dõi đối tượng duy nhất
-        cropped_obj = frame[y1:y2, x1:x2]
-
-        if cropped_obj.size > 0:  # Kiểm tra bounding box không rỗng
-            save_path = f"tracked_images/track_{saved_image_count}.jpg"
-            cv2.imwrite(save_path, cropped_obj)
-            print(f"Saved image: {save_path}")
-            saved_image_count += 1
-
-       
+        # tracks = tracker.update_tracks(detect, frame=frame)
 
         # tracked_ids = [track.track_id for track in tracks if track.is_confirmed()]
-        # print(tracked_ids)
-        # if str(tracked_object_id) not in tracked_ids:
-        #     print("Đối tượng bị mất dấu, cần tìm lại...")
-        #     tracked_bbox, first_frame = match_object_with_query(query_vector, results, frame, first_frame=True)
+
+        # if tracked_object_id not in tracked_ids:
+        #     results = model_yolo(frame)
+            
+        #     tracked_bbox = match_object_with_query(query_vector, results, frame)
+        #     print(tracked_bbox)
         #     if tracked_bbox:
-        #         print(f"Tìm lại đối tượng, ID: {tracked_object_id}")
-        #     else:
-        #         tracked_object_id = None  # Nếu không tìm lại được, reset ID đối tượng
-        #         print("Không tìm lại được đối tượng.")
+        #         tracked_object_id = f'{text}'  # Gán ID cố định để track object duy nhất\
 
-        for track in tracks:
-            if track.is_confirmed(): #and track.track_id == tracked_object_id:
-                ltrb = track.to_ltrb()
-                x1, y1, x2, y2 = map(int, ltrb)
-                color = [73,248,255]
-                B, G, R = map(int, color)
+        # Hiển thị và ghi video
+        out.write(frame)
+        resized_frame = cv2.resize(frame, (1280, 720))
+        cv2.imshow("Tracking test", resized_frame)
 
-                label = f"Tracked-{tracked_object_id}"
-                print(label)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (B, G, R), 2)
-                cv2.rectangle(frame, (x1 - 1, y1 - 20), (x1 + len(label) * 12, y1), (B, G, R), -1)
-                cv2.putText(frame, label, (x1 + 5, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        if cv2.waitKey(1) == ord("q"):
+            break
 
-
-
-    # DeepSORT cập nhật tracking nếu đã có bounding box
-    # detect = []
-    # if tracked_bbox:
-    #     x1, y1, x2, y2 = tracked_bbox
-    #     detect.append([[x1, y1, x2 - x1, y2 - y1], conf_threshold, tracked_object_id])
-    #     cropped_obj = frame[y1:y2, x1:x2]
-
-    #     if cropped_obj.size > 0:  # Kiểm tra bounding box không rỗng
-    #         save_path = f"tracked_images/track_{saved_image_count}.jpg"
-    #         cv2.imwrite(save_path, cropped_obj)
-    #         print(f"Saved image: {save_path}")
-    #         saved_image_count += 1
-
-
-    # tracks = tracker.update_tracks(detect, frame=frame)
-
-    # tracked_ids = [track.track_id for track in tracks if track.is_confirmed()]
-
-    # if tracked_object_id not in tracked_ids:
-    #     results = model_yolo(frame)
-        
-    #     tracked_bbox = match_object_with_query(query_vector, results, frame)
-    #     print(tracked_bbox)
-    #     if tracked_bbox:
-    #         tracked_object_id = f'{text}'  # Gán ID cố định để track object duy nhất\
-
-    # Hiển thị và ghi video
-    out.write(frame)
-    resized_frame = cv2.resize(frame, (1280, 720))
-    cv2.imshow("Tracking test", resized_frame)
-
-    if cv2.waitKey(1) == ord("q"):
-        break
-
-cap.release()
-out.release()
-cv2.destroyAllWindows()
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
